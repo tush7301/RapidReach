@@ -1,0 +1,1 @@
+"""SalesShortcut — UI Client dashboard."""

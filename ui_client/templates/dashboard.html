@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SalesShortcut — AI-Powered SDR Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <!-- ── Header ──────────────────────────────────────── -->
+    <div class="header">
+        <h1>⚡ SalesShortcut</h1>
+        <div class="status-dot" id="status-dot"></div>
+        <span class="status-text" id="status-text">Connecting...</span>
+        <div class="header-right">
+            <span style="font-size:12px; color:var(--text-dim);">AI-Powered SDR System</span>
+        </div>
+    </div>
+
+    <!-- ── Main Layout ─────────────────────────────────── -->
+    <div class="container">
+
+        <!-- Stats Bar -->
+        <div class="stats-bar" style="margin-bottom: 20px;">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-leads">0</div>
+                <div class="stat-label">Leads Found</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-contacted">0</div>
+                <div class="stat-label">Contacted</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-meetings">0</div>
+                <div class="stat-label">Meetings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-hot">0</div>
+                <div class="stat-label">Hot Leads</div>
+            </div>
+        </div>
+
+        <div class="grid">
+
+            <!-- ── Sidebar: Controls ───────────────────── -->
+            <div class="controls">
+
+                <!-- Lead Finder -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>🔍 Find Leads</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label>City</label>
+                            <input type="text" id="city-input" placeholder="e.g. San Francisco, CA" value="">
+                        </div>
+                        <div class="form-group" style="margin-top:8px;">
+                            <label>Max Results</label>
+                            <input type="number" id="max-results" value="20" min="1" max="100">
+                        </div>
+                        <button class="btn btn-primary" id="find-leads-btn" onclick="findLeads()" style="margin-top:12px; width:100%;">
+                            🔍 Find Leads
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Email Processing -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>📧 Email & Meetings</h2>
+                    </div>
+                    <div class="card-body">
+                        <p style="font-size:13px; color:var(--text-dim); margin-bottom:10px;">
+                            Scan inbox for replies, detect meeting requests, and auto-schedule.
+                        </p>
+                        <button class="btn btn-secondary" id="process-emails-btn" onclick="processEmails()" style="width:100%;">
+                            📧 Process Inbox
+                        </button>
+                    </div>
+                </div>
+
+                <!-- SDR Settings -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>⚙️ SDR Settings</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                                <input type="checkbox" id="skip-call" style="width:auto;">
+                                <span>Skip phone calls (email only)</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Event Log -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>📋 Activity Log</h2>
+                        <span class="badge" style="background:var(--surface-2); color:var(--text-dim);" id="event-count">0 events</span>
+                    </div>
+                    <div class="event-log" id="event-log">
+                        <div class="event-item" style="color:var(--text-dim); justify-content:center;">
+                            Waiting for events...
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ── Main Content ────────────────────────── -->
+            <div class="main-content">
+
+                <!-- Tabs -->
+                <div class="card">
+                    <div class="tabs">
+                        <div class="tab active" data-tab="leads">Discovered Leads</div>
+                        <div class="tab" data-tab="outreach">SDR Outreach</div>
+                        <div class="tab" data-tab="meetings">Meetings</div>
+                    </div>
+
+                    <!-- Tab: Leads -->
+                    <div class="tab-content active" id="tab-leads">
+                        <div style="overflow-x:auto;">
+                            <table class="leads-table">
+                                <thead>
+                                    <tr>
+                                        <th>Business</th>
+                                        <th>Address</th>
+                                        <th>Phone</th>
+                                        <th>Rating</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="leads-tbody">
+                                    <tr>
+                                        <td colspan="6" style="text-align:center; color:var(--text-dim); padding:40px;">
+                                            No leads yet. Enter a city and click "Find Leads" to start.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Outreach -->
+                    <div class="tab-content" id="tab-outreach">
+                        <div class="card-body">
+                            <div id="outreach-log" style="color:var(--text-dim); text-align:center; padding:40px;">
+                                SDR outreach events will appear here when you run SDR on a lead.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Meetings -->
+                    <div class="tab-content" id="tab-meetings">
+                        <div class="card-body">
+                            <div id="meetings-log" style="color:var(--text-dim); text-align:center; padding:40px;">
+                                Scheduled meetings will appear here.
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Human Input Modal ──────────────────────────── -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal">
+            <h3>🤖 Agent Needs Your Input</h3>
+            <p id="modal-prompt" style="margin-bottom:12px; color:var(--text-dim);"></p>
+            <textarea id="modal-input" placeholder="Type your response..."></textarea>
+            <div class="btn-row">
+                <button class="btn btn-secondary btn-small" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary btn-small" id="modal-submit">Submit</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

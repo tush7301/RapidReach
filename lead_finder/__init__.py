@@ -1,0 +1,1 @@
+"""SalesShortcut — Lead Finder service."""
