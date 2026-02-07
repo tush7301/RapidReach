@@ -1,12 +1,13 @@
 """
 sdr/tools/phone_call.py
 ElevenLabs Conversational AI phone call wrapper.
-Validates phone numbers, initiates calls, captures transcripts.
+Uses batch_calls API for outbound calls, polls for completion, fetches transcript.
 Includes cooldown to prevent repeated calls to the same lead.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 # Cooldown: no repeat calls to the same number within N seconds
 CALL_COOLDOWN_SECONDS = 3600  # 1 hour
 _recent_calls: dict[str, float] = {}
+
+# Max time to wait for a call to complete (seconds)
+CALL_TIMEOUT = 300  # 5 minutes
+POLL_INTERVAL = 5   # check every 5 seconds
 
 
 def _validate_phone(phone: str) -> str | None:
@@ -79,35 +84,98 @@ async def make_phone_call(
 
     try:
         from elevenlabs.client import ElevenLabs
+        from elevenlabs.types import OutboundCallRecipient
+        from elevenlabs.types.conversation_initiation_client_data_request_input import (
+            ConversationInitiationClientDataRequestInput,
+        )
 
         el_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
-        # Initiate conversational call
-        # NOTE: The exact API depends on your ElevenLabs plan / agent setup.
-        # This uses the Conversational AI outbound call API.
-        call_result = el_client.conversational_ai.create_call(
-            agent_id=ELEVENLABS_AGENT_ID,
+        # Build recipient with dynamic variables for the agent
+        recipient = OutboundCallRecipient(
             phone_number=validated,
-            first_message=f"Hi, am I speaking with someone from {business_name}?",
-            variables={
-                "business_name": business_name,
-                "context": context[:500],
-                "proposal": proposal_summary[:500],
-            },
+            conversation_initiation_client_data=ConversationInitiationClientDataRequestInput(
+                dynamic_variables={
+                    "business_name": business_name,
+                    "context": context[:500],
+                    "proposal": proposal_summary[:500],
+                },
+            ),
         )
+
+        # Create a batch call (works for single calls too)
+        batch = el_client.conversational_ai.batch_calls.create(
+            call_name=f"SDR Call — {business_name}",
+            agent_id=ELEVENLABS_AGENT_ID,
+            recipients=[recipient],
+        )
+
+        batch_id = batch.id
+        logger.info(f"Batch call created: {batch_id} for {business_name}")
 
         _recent_calls[validated] = time.time()
 
-        transcript = getattr(call_result, "transcript", "")
-        call_duration = getattr(call_result, "duration_seconds", 0)
-        call_status = getattr(call_result, "status", "completed")
+        # Poll until the call finishes or times out
+        transcript = ""
+        conversation_id = ""
+        call_status = "initiated"
+        elapsed = 0
+
+        while elapsed < CALL_TIMEOUT:
+            await asyncio.sleep(POLL_INTERVAL)
+            elapsed += POLL_INTERVAL
+
+            try:
+                details = el_client.conversational_ai.batch_calls.get(batch_id=batch_id)
+                # Check if all calls are finished
+                if details.total_calls_finished >= details.total_calls_dispatched and details.total_calls_dispatched > 0:
+                    call_status = "completed"
+
+                    # Get the conversation ID from the recipient
+                    if details.recipients:
+                        r = details.recipients[0]
+                        conversation_id = getattr(r, "conversation_id", "") or ""
+                        call_status = getattr(r, "status", "completed") or "completed"
+
+                    break
+
+                status_str = getattr(details, "status", "")
+                if status_str in ("failed", "cancelled"):
+                    call_status = status_str
+                    break
+
+            except Exception as poll_err:
+                logger.warning(f"Polling error: {poll_err}")
+
+        # Fetch transcript if we have a conversation ID
+        if conversation_id:
+            try:
+                convo = el_client.conversational_ai.conversations.get(
+                    conversation_id=conversation_id
+                )
+                # Build transcript from the conversation
+                if hasattr(convo, "transcript") and convo.transcript:
+                    lines = []
+                    for turn in convo.transcript:
+                        role = getattr(turn, "role", "unknown")
+                        text = getattr(turn, "message", "") or getattr(turn, "text", "")
+                        if text:
+                            lines.append(f"{role}: {text}")
+                    transcript = "\n".join(lines)
+
+                if not transcript and hasattr(convo, "analysis") and convo.analysis:
+                    transcript = getattr(convo.analysis, "transcript_summary", "") or ""
+
+            except Exception as t_err:
+                logger.warning(f"Failed to fetch transcript: {t_err}")
 
         return json.dumps({
             "success": True,
             "phone_number": validated,
             "business_name": business_name,
-            "transcript": transcript,
-            "duration_seconds": call_duration,
+            "transcript": transcript or "(call completed, transcript unavailable)",
+            "conversation_id": conversation_id,
+            "batch_id": batch_id,
             "status": call_status,
             "called_at": datetime.utcnow().isoformat(),
         })

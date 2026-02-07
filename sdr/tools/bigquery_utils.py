@@ -41,6 +41,33 @@ def _get_client():
         return None
 
 
+def ensure_table_exists() -> bool:
+    """Create dataset and sdr_sessions table if they don't exist."""
+    client = _get_client()
+    if not client:
+        return False
+    try:
+        from google.cloud import bigquery
+
+        dataset_ref = f"{GOOGLE_CLOUD_PROJECT}.{BIGQUERY_DATASET}"
+        dataset = bigquery.Dataset(dataset_ref)
+        dataset.location = "US"
+        client.create_dataset(dataset, exists_ok=True)
+
+        table_ref = f"{dataset_ref}.{BIGQUERY_SDR_SESSIONS_TABLE}"
+        schema = [
+            bigquery.SchemaField(f["name"], f["type"], mode=f.get("mode", "NULLABLE"))
+            for f in SDR_SCHEMA
+        ]
+        table = bigquery.Table(table_ref, schema=schema)
+        client.create_table(table, exists_ok=True)
+        logger.info(f"Table {table_ref} ready")
+        return True
+    except Exception as e:
+        logger.error(f"ensure_table_exists failed: {e}")
+        return False
+
+
 def save_sdr_session(session_data: dict[str, Any]) -> str:
     """
     Persist an SDR session record to BigQuery.
@@ -54,6 +81,9 @@ def save_sdr_session(session_data: dict[str, Any]) -> str:
     client = _get_client()
     if not client:
         return json.dumps({"success": False, "error": "BigQuery unavailable"})
+
+    # Auto-create table if it doesn't exist
+    ensure_table_exists()
 
     table_ref = f"{GOOGLE_CLOUD_PROJECT}.{BIGQUERY_DATASET}.{BIGQUERY_SDR_SESSIONS_TABLE}"
     try:
