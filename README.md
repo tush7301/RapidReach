@@ -1,8 +1,8 @@
-# ⚡ SalesShortcut
+# ⚡ RapidReach
 
 **AI-Powered Sales Development Representative System**
 
-A multi-agent system that automates the entire SDR workflow — from discovering local businesses without websites, to researching them, calling with an AI voice, sending tailored proposals, and auto-scheduling meetings when they reply. Built with [Dedalus ADK](https://docs.dedaluslabs.ai) at Columbia ADI DevFest 2026.
+A multi-agent system that automates the entire SDR workflow — from discovering local businesses without websites, to researching them, calling with an AI voice, sending tailored proposals, generating professional business decks, and auto-scheduling meetings when they reply. Built with [Dedalus ADK](https://docs.dedaluslabs.ai) at Columbia ADI DevFest 2026.
 
 ---
 
@@ -21,8 +21,18 @@ A multi-agent system that automates the entire SDR workflow — from discovering
        │         │ • AI phone call     │          │          │ • Check calendar │
        │         │ • Classify outcome  │          │          │ • Schedule meet  │
        │         │ • Send email        │          │          │ • Google Meet    │
+       │         │ • Generate deck     │          │          │ • Attach deck    │
        │         └─────────────────────┘          │          └─────────────────┘
-       │                                          │
+       │                    │                     │                    │
+       │                    ▼                     │                    │
+       │         ┌──────────────────────┐         │                    │
+       │         │   Deck Generator     │         │                    │
+       │         │      (8085)          │         │                    │
+       │         │ • Generate PowerPoint│         │                    │
+       │         │ • Professional slides│         │                    │
+       │         │ • Business solutions │         │                    │
+       │         └──────────────────────┘         │                    │
+       │                                          │                    │
        ▼                    ▼                     ▼                    ▼
   ┌─────────────────────────────────────────────────────────────────────────┐
   │                    UI Client Dashboard (8000)                          │
@@ -38,6 +48,8 @@ A multi-agent system that automates the entire SDR workflow — from discovering
 | **4. Call** | Places an AI phone call via ElevenLabs conversational AI |
 | **5. Classify** | LLM classifies call outcome: interested / agreed to email / not interested |
 | **6. Email** | Sends personalized HTML proposal email via Gmail |
+| **7. Generate Deck** | Creates professional PowerPoint business solution deck |
+| **8. Follow-up** | Monitors Gmail for replies and auto-schedules meetings with deck attachments |
 | **7. Listen** | Gmail Pub/Sub Listener watches for replies in real-time |
 | **8. Schedule** | Lead Manager detects meeting requests and auto-books Google Calendar + Meet |
 
@@ -171,7 +183,38 @@ Open 5 terminal tabs:
 
 ```bash
 # Terminal 1 — Dashboard (start this first)
-PYTHONPATH=. python -m ui_client
+Pub/Sub listener stopped: 403 Cloud Pub/Sub API has not been used in project 745899766698 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/pubsub.googleapis.com/overview?project=745899766698 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry. [reason: "SERVICE_DISABLED"
+domain: "googleapis.com"
+metadata {
+  key: "service"
+  value: "pubsub.googleapis.com"
+}
+metadata {
+  key: "serviceTitle"
+  value: "Cloud Pub/Sub API"
+}
+metadata {
+  key: "containerInfo"
+  value: "745899766698"
+}
+metadata {
+  key: "consumer"
+  value: "projects/745899766698"
+}
+metadata {
+  key: "activationUrl"
+  value: "https://console.developers.google.com/apis/api/pubsub.googleapis.com/overview?project=745899766698"
+}
+, locale: "en-US"
+message: "Cloud Pub/Sub API has not been used in project 745899766698 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/pubsub.googleapis.com/overview?project=745899766698 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry."
+, links {
+  description: "Google developers console API activation"
+  url: "https://console.developers.google.com/apis/api/pubsub.googleapis.com/overview?project=745899766698"
+}
+]
+2026-02-07 20:13:45,902 [__main__] INFO: Pub/Sub failed, starting polling fallback
+2026-02-07 20:13:45,902 [__main__] INFO: Starting polling fallback (interval=60s)
+2026-02-07 20:13:45,903 [googleapiclient.discovery_cache] INFO: file_cache is only supported with oauth2client<4.0.0
 
 # Terminal 2 — Lead Finder
 PYTHONPATH=. python -m lead_finder

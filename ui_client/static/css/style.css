@@ -336,6 +336,7 @@ body {
 .badge-lead_manager { background: rgba(34,197,94,0.2); color: var(--green); }
 .badge-calendar { background: rgba(249,115,22,0.2); color: var(--orange); }
 .badge-gmail_listener { background: rgba(234,179,8,0.2); color: var(--yellow); }
+.badge-deck_generator { background: rgba(236,72,153,0.2); color: #ec4899; }
 
 .event-item .event-message {
     color: var(--text);

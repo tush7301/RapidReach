@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 from fastapi import FastAPI
@@ -50,8 +52,237 @@ from sdr.tools.bigquery_utils import save_sdr_session, update_lead_status
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# Fallback email — used only when no email is found from business data or transcript
+FALLBACK_EMAIL = os.getenv("FALLBACK_EMAIL", "arnavahuja21@gmail.com")
+
 # In-memory session store
 sdr_sessions: dict[str, SDRResult] = {}
+
+# ── Email extraction from spoken transcripts ─────────────────
+
+_NUMBER_WORDS_MAP = {
+    'zero': '0', 'oh': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+    'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13',
+    'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17',
+    'eighteen': '18', 'nineteen': '19', 'twenty': '20', 'thirty': '30',
+    'forty': '40', 'fifty': '50', 'sixty': '60', 'seventy': '70',
+    'eighty': '80', 'ninety': '90',
+}
+_NUMBER_WORDS_SET = set(_NUMBER_WORDS_MAP.keys())
+_NUMBER_WORDS_RE = '|'.join(sorted(_NUMBER_WORDS_MAP.keys(), key=len, reverse=True))
+
+_INVALID_SOLO_USERNAMES = _NUMBER_WORDS_SET | {
+    'wednesday', 'thursday', 'monday', 'tuesday', 'friday', 'saturday', 'sunday',
+    'call', 'look', 'looking', 'reach', 'meet', 'available', 'scheduled',
+    'appointment', 'meeting', 'time', 'address', 'number', 'phone', 'business',
+    'interested', 'discussed', 'contact', 'march', 'april', 'may', 'june',
+    'january', 'february', 'july', 'august', 'september', 'october', 'november',
+    'december', 'invitation', 'information', 'provide', 'discuss', 'touch',
+    'email', 'your', 'that', 'this', 'with', 'from', 'have', 'been',
+    'a', 'i', 'my', 'me', 'is', 'it', 'in', 'on', 'to', 'of', 'or', 'an',
+    'the', 'and', 'for', 'but', 'not', 'are', 'was', 'has', 'had', 'his',
+    'her', 'our', 'can', 'you', 'all', 'its',
+}
+
+_STRIP_LEADING = {'your', 'my', 'is', 'email', 'address', 'it', 'its',
+                   "it's", "that's", 'thats', 'the', 'a'}
+
+
+def extract_emails_from_transcript(text: str) -> list[str]:
+    """
+    Robustly extract email addresses from a call transcript.
+    Handles:
+      - Standard format:      user@gmail.com
+      - Mixed spoken:         TM07MARCH at gmail.com
+      - Spoken with dot:      tm07march at gmail dot com
+      - Fully spelled out:    T M zero seven M A R C H at gmail dot com
+      - Dictated short form:  t m zero seven march at gmail dot com
+    Returns list of emails, best match first.
+    """
+    import re
+    candidates: list[tuple[int, str]] = []
+
+    # 1) Standard email with @ symbol
+    for m in re.finditer(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', text):
+        candidates.append((100, m.group()))
+
+    # 2) Contiguous username + " at " + domain.tld  (e.g. "TM07MARCH at gmail.com")
+    for m in re.finditer(
+        r'\b([A-Za-z0-9._%+-]{2,})\s+at\s+([A-Za-z0-9]+\.[A-Za-z]{2,})\b',
+        text, re.IGNORECASE,
+    ):
+        if m.group(1).lower() not in _INVALID_SOLO_USERNAMES:
+            candidates.append((90, f"{m.group(1)}@{m.group(2)}"))
+
+    # 3) Contiguous username + " at " + domain + " dot " + tld
+    for m in re.finditer(
+        r'\b([A-Za-z0-9._%+-]{2,})\s+at\s+([A-Za-z0-9]+)\s+dot\s+([A-Za-z]{2,})\b',
+        text, re.IGNORECASE,
+    ):
+        if m.group(1).lower() not in _INVALID_SOLO_USERNAMES:
+            candidates.append((85, f"{m.group(1)}@{m.group(2)}.{m.group(3)}"))
+
+    # 4) Spelled-out username + " at " + domain + " dot " + tld
+    #    e.g. "T M zero seven M A R C H at gmail dot com"
+    _tok = rf'(?:[A-Za-z]|{_NUMBER_WORDS_RE}|\d+|[A-Za-z]{{2,6}})'
+    for m in re.finditer(
+        rf'(?<![A-Za-z])({_tok}(?:\s+{_tok})+)\s+at\s+([A-Za-z0-9]+)\s+dot\s+([A-Za-z]{{2,}})\b',
+        text, re.IGNORECASE,
+    ):
+        raw, domain, tld = m.group(1), m.group(2), m.group(3)
+        tokens = raw.split()
+        while tokens and tokens[0].lower() in _STRIP_LEADING:
+            tokens.pop(0)
+        raw = ' '.join(tokens)
+        if not raw:
+            continue
+        cleaned = raw
+        for w, d in sorted(_NUMBER_WORDS_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+            cleaned = re.sub(rf'\b{w}\b', d, cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\s+', '', cleaned)
+        if len(cleaned) >= 3:
+            candidates.append((80, f"{cleaned}@{domain}.{tld}"))
+
+    # 5) Spelled-out username + " at " + domain.tld
+    for m in re.finditer(
+        rf'(?<![A-Za-z])({_tok}(?:\s+{_tok})+)\s+at\s+([A-Za-z0-9]+\.[A-Za-z]{{2,}})\b',
+        text, re.IGNORECASE,
+    ):
+        raw, domain = m.group(1), m.group(2)
+        tokens = raw.split()
+        while tokens and tokens[0].lower() in _STRIP_LEADING:
+            tokens.pop(0)
+        raw = ' '.join(tokens)
+        if not raw:
+            continue
+        cleaned = raw
+        for w, d in sorted(_NUMBER_WORDS_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+            cleaned = re.sub(rf'\b{w}\b', d, cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\s+', '', cleaned)
+        if len(cleaned) >= 3:
+            candidates.append((75, f"{cleaned}@{domain}"))
+
+    # De-duplicate, normalise to lowercase, best-priority first
+    candidates.sort(key=lambda x: -x[0])
+    seen: set[str] = set()
+    unique: list[str] = []
+    for _, email in candidates:
+        e_lower = email.lower().strip('.')
+        if e_lower not in seen:
+            seen.add(e_lower)
+            unique.append(e_lower)
+    return unique
+
+
+# ── Meeting time extraction from transcripts ─────────────────
+
+_DAY_NAMES = {
+    'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+    'friday': 4, 'saturday': 5, 'sunday': 6,
+}
+
+_TIME_WORDS = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+    'eleven': 11, 'twelve': 12,
+}
+
+
+def _next_weekday(day_index: int, after: datetime | None = None) -> datetime:
+    """Return the next occurrence of a weekday (0=Mon … 6=Sun)."""
+    base = after or datetime.now()
+    days_ahead = day_index - base.weekday()
+    if days_ahead <= 0:
+        days_ahead += 7
+    return base + timedelta(days=days_ahead)
+
+
+def extract_meeting_time_from_transcript(transcript: str) -> datetime:
+    """
+    Parse a meeting time mentioned in a call transcript.
+    Looks for patterns like "Wednesday at 11", "friday at 2 p.m.", "Tuesday 3pm".
+    Falls back to next Wednesday at 11:00 AM if nothing is found.
+    """
+    text = transcript.lower()
+
+    # Pattern: <day_name> at <time> (am/pm)
+    day_pattern = '|'.join(_DAY_NAMES.keys())
+    time_pattern = re.compile(
+        rf'\b({day_pattern})\s+(?:at\s+)?(\d{{1,2}}|'
+        + '|'.join(_TIME_WORDS.keys())
+        + r')(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?|am|pm)?',
+        re.IGNORECASE,
+    )
+
+    match = time_pattern.search(text)
+    if match:
+        day_str = match.group(1).lower()
+        hour_raw = match.group(2)
+        minute_str = match.group(3)
+        ampm = (match.group(4) or '').replace('.', '').lower()
+
+        # Convert hour
+        hour = _TIME_WORDS.get(hour_raw, None)
+        if hour is None:
+            hour = int(hour_raw)
+        minute = int(minute_str) if minute_str else 0
+
+        # Apply AM/PM
+        if ampm == 'pm' and hour < 12:
+            hour += 12
+        elif ampm == 'am' and hour == 12:
+            hour = 0
+        elif not ampm and 1 <= hour <= 7:
+            # Assume PM for business hours (1-7 without am/pm)
+            hour += 12
+
+        target_day = _next_weekday(_DAY_NAMES[day_str])
+        return target_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    # Default: next Wednesday at 11:00 AM
+    default = _next_weekday(2)  # Wednesday = 2
+    return default.replace(hour=11, minute=0, second=0, microsecond=0)
+
+
+def generate_ics(
+    start: datetime,
+    duration_minutes: int = 30,
+    summary: str = "RapidReach — Follow-up Meeting",
+    description: str = "",
+    attendee_email: str = "",
+    organizer_email: str = "",
+) -> str:
+    """Generate an iCalendar (.ics) string for a meeting invite."""
+    end = start + timedelta(minutes=duration_minutes)
+    uid = str(uuid.uuid4())
+    now_stamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+    start_stamp = start.strftime('%Y%m%dT%H%M%S')
+    end_stamp = end.strftime('%Y%m%dT%H%M%S')
+
+    lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//RapidReach//SDR//EN',
+        'METHOD:REQUEST',
+        'BEGIN:VEVENT',
+        f'UID:{uid}',
+        f'DTSTAMP:{now_stamp}',
+        f'DTSTART:{start_stamp}',
+        f'DTEND:{end_stamp}',
+        f'SUMMARY:{summary}',
+        f'DESCRIPTION:{description}',
+    ]
+    if organizer_email:
+        lines.append(f'ORGANIZER;CN=RapidReach Team:mailto:{organizer_email}')
+    if attendee_email:
+        lines.append(f'ATTENDEE;RSVP=TRUE:mailto:{attendee_email}')
+    lines += [
+        'STATUS:CONFIRMED',
+        'END:VEVENT',
+        'END:VCALENDAR',
+    ]
+    return '\r\n'.join(lines)
 
 
 @asynccontextmanager
@@ -102,14 +333,14 @@ Provide a detailed research report."""
 
     # Three-tier fallback approach
     
-    # Tier 1: Try Brave Search MCP
+    # Tier 1: Try Brave Search MCP (single attempt — fail fast to Google)
     try:
         print("🔍 Attempting research with Brave Search MCP...")
         result = await runner.run(
             input=research_prompt,
             model=RESEARCH_MODEL,
             mcp_servers=["windsor/brave-search-mcp"],
-            max_steps=5,
+            max_steps=1,
         )
         print(f"✅ Research result (Brave Search MCP): {result.final_output}")
         return result.final_output
@@ -118,13 +349,13 @@ Provide a detailed research report."""
         print(f"❌ Brave Search MCP failed: {e}")
         print("🔍 Falling back to Google Search MCP...")
         
-        # Tier 2: Try Google Search MCP
+        # Tier 2: Try Google Search MCP (single attempt — fail fast to knowledge)
         try:
             result = await runner.run(
                 input=research_prompt,
                 model=RESEARCH_MODEL,
                 mcp_servers=["google-search"],
-                max_steps=5,
+                max_steps=1,
             )
             print(f"✅ Research result (Google Search MCP): {result.final_output}")
             return result.final_output
@@ -331,10 +562,22 @@ async def health():
 async def run_sdr_endpoint(req: SDRRequest):
     """
     Execute the full SDR pipeline for a business lead.
-    Research → Proposal → Call → Classify → Email (if interested) → Save.
+    Direct sequential execution — NO LLM orchestration.
+    Each step is called directly from Python, guaranteeing execution.
+
+    Pipeline: Research → Proposal → Fact-check → Call → Classify → Deck → Email → Save
     """
     session_id = str(uuid.uuid4())
     callback_url = req.callback_url
+
+    # Accumulate step summaries for the final output
+    step_results: dict[str, str] = {}
+    call_transcript = ""
+    call_outcome = "other"
+    research_summary = ""
+    proposal_content = ""
+    email_result = ""
+    email_subject = ""
 
     await notify_ui(callback_url, AgentCallback(
         agent_type=AgentType.SDR,
@@ -345,419 +588,345 @@ async def run_sdr_endpoint(req: SDRRequest):
     ))
 
     try:
-        client = AsyncDedalus()
-        runner = DedalusRunner(client)
+        # ── STEP 1/8: RESEARCH ──────────────────────────────────
+        print("\n" + "=" * 60)
+        print("📋 STEP 1/8 — RESEARCH")
+        print("=" * 60)
+        await notify_ui(callback_url, AgentCallback(
+            agent_type=AgentType.SDR,
+            event="step_progress",
+            business_name=req.business_name,
+            message="Step 1/8 — Researching business...",
+        ))
+        try:
+            research_summary = await research_business(
+                req.business_name, req.city, req.address or ""
+            )
+            print(f"✅ STEP 1/8 COMPLETED — Research ({len(research_summary)} chars)")
+            step_results["research"] = "completed"
+        except Exception as e:
+            print(f"❌ STEP 1/8 FAILED — {e}")
+            research_summary = f"Research unavailable for {req.business_name} in {req.city}."
+            step_results["research"] = f"failed: {e}"
 
-        # Build the coordinator instructions
-        # Build step instructions based on skip_call setting
-        step4_instruction = "- SKIP THIS STEP - User disabled phone calls" if req.skip_call else f"""- You MUST call: call_business(research_summary, proposal_content)
-- Use ACTUAL data from previous steps
-- Store result in variable: call_result
-- CONFIRM: "✅ STEP 4/7 COMPLETED - Phone call to {req.phone} finished\""""
+        # ── STEP 2/8: DRAFT PROPOSAL ────────────────────────────
+        print("\n" + "=" * 60)
+        print("📋 STEP 2/8 — DRAFT PROPOSAL")
+        print("=" * 60)
+        await notify_ui(callback_url, AgentCallback(
+            agent_type=AgentType.SDR,
+            event="step_progress",
+            business_name=req.business_name,
+            message="Step 2/8 — Drafting website proposal...",
+        ))
+        try:
+            proposal_content = await draft_proposal(
+                req.business_name, research_summary
+            )
+            print(f"✅ STEP 2/8 COMPLETED — Proposal ({len(proposal_content)} chars)")
+            step_results["proposal"] = "completed"
+        except Exception as e:
+            print(f"❌ STEP 2/8 FAILED — {e}")
+            proposal_content = f"Website proposal for {req.business_name} — details to follow."
+            step_results["proposal"] = f"failed: {e}"
 
-        step5_instruction = "- SKIP THIS STEP - No call was made" if req.skip_call else f"""- You MUST extract transcript from call_result
-- You MUST call: classify_call_outcome(transcript, "{req.business_name}")
-- Store result in variable: call_classification
-- CONFIRM: "✅ STEP 5/7 COMPLETED - Call outcome classified\""""
+        # ── STEP 3/8: FACT-CHECK PROPOSAL ────────────────────────
+        print("\n" + "=" * 60)
+        print("📋 STEP 3/8 — FACT-CHECK PROPOSAL")
+        print("=" * 60)
+        await notify_ui(callback_url, AgentCallback(
+            agent_type=AgentType.SDR,
+            event="step_progress",
+            business_name=req.business_name,
+            message="Step 3/8 — Fact-checking proposal...",
+        ))
+        try:
+            proposal_content = await fact_check_proposal(
+                proposal_content, req.business_name, research_summary
+            )
+            print(f"✅ STEP 3/8 COMPLETED — Fact-checked ({len(proposal_content)} chars)")
+            step_results["fact_check"] = "completed"
+        except Exception as e:
+            print(f"❌ STEP 3/8 FAILED — {e}")
+            step_results["fact_check"] = f"failed: {e}"
 
-        expected_steps = "4 steps" if req.skip_call else "6-7 steps"
-
-        instructions = f"""You are an AI Sales Development Representative (SDR). You MUST execute ALL steps in EXACT order for {req.business_name}.
-
-Business Info:
-- Name: {req.business_name}
-- Phone: {req.phone}
-- Email: {req.email}
-- Address: {req.address}
-- City: {req.city}
-- Context: {req.lead_context}
-
-EXECUTE THESE STEPS IN EXACT ORDER - NO EXCEPTIONS:
-
-STEP 1/7 - RESEARCH:
-- You MUST call: research_business("{req.business_name}", "{req.city}", "{req.address}")
-- WAIT for complete result
-- Store result in variable: research_summary
-- CONFIRM: "✅ STEP 1/7 COMPLETED - Research finished"
-
-STEP 2/7 - DRAFT PROPOSAL:  
-- You MUST call: draft_proposal("{req.business_name}", research_summary)
-- Use the ACTUAL research_summary from step 1
-- Store result in variable: proposal_content
-- CONFIRM: "✅ STEP 2/7 COMPLETED - Proposal drafted"
-
-STEP 3/7 - FACT-CHECK:
-- You MUST call: fact_check_proposal(proposal_content, "{req.business_name}", research_summary)
-- Store result in variable: proposal_content (updated)
-- CONFIRM: "✅ STEP 3/7 COMPLETED - Proposal fact-checked"
-
-STEP 4/7 - PHONE CALL:
-{step4_instruction}
-
-STEP 5/7 - CLASSIFY CALL:
-{step5_instruction}
-
-STEP 6/7 - SEND EMAIL:
-- IF call outcome is 'interested' or 'agreed_to_email' (OR if calls are skipped):
-  - You MUST call: send_outreach_email(subject, html_body, call_transcript)
-  - Create professional subject and HTML email
-  - CONFIRM: "✅ STEP 6/7 COMPLETED - Email sent"
-- ELSE:
-  - CONFIRM: "✅ STEP 6/7 COMPLETED - Email not needed based on outcome"
-
-STEP 7/7 - SAVE SESSION:
-- You MUST call: save_sdr_result(research_summary, proposal_content, call_transcript, call_outcome, email_result, email_subject)
-- Use ALL actual data from previous steps
-- CONFIRM: "✅ STEP 7/7 COMPLETED - Session saved to database"
-
-MANDATORY EXECUTION RULES:
-1. Execute steps 1, 2, 3, and 7 ALWAYS
-2. Execute steps 4 and 5 unless skip_call=True
-3. Execute step 6 based on conditions
-4. NEVER skip a step without explicit reason
-5. CONFIRM each step completion with ✅ message
-6. Use ACTUAL data between functions - NO empty strings
-7. If any step fails, report error and continue to next step
-
-VERIFICATION:
-- You MUST complete exactly {expected_steps}
-- You MUST provide ✅ confirmation for each completed step
-- Final message MUST list all completed steps"""
-
-        # All specialist tools
-        tools = [
-            research_business,
-            draft_proposal,
-            fact_check_proposal,
-            classify_call_outcome,
-        ]
-
-        # Add phone call tool only if not skipped and phone is available
-        if not req.skip_call and req.phone:
-            async def call_business(research_context: str, proposal_content: str) -> str:
-                """Call the business on the phone with AI voice using research and proposal."""
-                print(f"\\n=== PHONE CALL TOOL DEBUG ===")
-                print(f"Business: {req.business_name}")
-                print(f"Phone: {req.phone}")
-                print(f"Research context length: {len(research_context)} chars")
-                print(f"Proposal content length: {len(proposal_content)} chars")
-                print(f"Research preview: {research_context[:200]}..." if research_context else "EMPTY RESEARCH")
-                print(f"Proposal preview: {proposal_content[:200]}..." if proposal_content else "EMPTY PROPOSAL")
-                print(f"============================\\n")
-                
-                return await make_phone_call(
+        # ── STEP 4/8: PHONE CALL ─────────────────────────────────
+        print("\n" + "=" * 60)
+        print("📋 STEP 4/8 — PHONE CALL")
+        print("=" * 60)
+        if req.skip_call:
+            print("⏭️  STEP 4/8 SKIPPED — skip_call=True")
+            step_results["phone_call"] = "skipped"
+        else:
+            await notify_ui(callback_url, AgentCallback(
+                agent_type=AgentType.SDR,
+                event="step_progress",
+                business_name=req.business_name,
+                message=f"Step 4/8 — Calling {req.phone}...",
+            ))
+            try:
+                call_result_json = await make_phone_call(
                     phone_number=req.phone,
                     business_name=req.business_name,
-                    context=research_context,
+                    context=research_summary,
                     proposal_summary=proposal_content,
                 )
-            tools.append(call_business)
- 
-        # Email tool - always add it but handle missing email gracefully
-        async def send_outreach_email(subject: str, html_body: str, call_transcript: str = "") -> str:
-            """Send an outreach email to the business."""
-            print(f"\\n=== EMAIL TOOL DEBUG ===")
-            print(f"Business: {req.business_name}")
-            print(f"Original email: {req.email}")
-            print(f"Call transcript length: {len(call_transcript)} chars")
-            print(f"Subject: {subject}")
-            print(f"HTML body length: {len(html_body)} chars")
-            print(f"HTML preview: {html_body[:300]}...")
-            
-            # Try to extract email from transcript if original email is missing
+                print(f"📞 Raw call result: {call_result_json[:300]}...")
+                call_result = json.loads(call_result_json)
+                call_transcript = call_result.get("transcript", "")
+                print(f"✅ STEP 4/8 COMPLETED — Call done, transcript {len(call_transcript)} chars")
+                # Extract email from transcript immediately
+                if call_transcript:
+                    found_emails = extract_emails_from_transcript(call_transcript)
+                    if found_emails:
+                        print(f"📧 Extracted email from transcript: {found_emails[0]}")
+                step_results["phone_call"] = "completed"
+            except Exception as e:
+                print(f"❌ STEP 4/8 FAILED — {e}")
+                import traceback
+                traceback.print_exc()
+                step_results["phone_call"] = f"failed: {e}"
+
+        # ── STEP 5/8: CLASSIFY CALL OUTCOME ──────────────────────
+        print("\n" + "=" * 60)
+        print("📋 STEP 5/8 — CLASSIFY CALL OUTCOME")
+        print("=" * 60)
+        if req.skip_call or not call_transcript:
+            reason = "skip_call=True" if req.skip_call else "no transcript"
+            print(f"⏭️  STEP 5/8 SKIPPED — {reason}")
+            call_outcome = "other"
+            step_results["classify"] = f"skipped ({reason})"
+        else:
+            await notify_ui(callback_url, AgentCallback(
+                agent_type=AgentType.SDR,
+                event="step_progress",
+                business_name=req.business_name,
+                message="Step 5/8 — Classifying call outcome...",
+            ))
+            try:
+                classification_json = await classify_call_outcome(
+                    call_transcript, req.business_name
+                )
+                print(f"📊 Classification raw: {classification_json[:300]}...")
+                # Parse the classification — handle LLM returning markdown-wrapped JSON
+                clean_json = classification_json.strip()
+                if clean_json.startswith("```"):
+                    clean_json = re.sub(r"^```(?:json)?\s*", "", clean_json)
+                    clean_json = re.sub(r"\s*```$", "", clean_json)
+                classification = json.loads(clean_json)
+                call_outcome = classification.get("outcome", "other")
+                print(f"✅ STEP 5/8 COMPLETED — Outcome: {call_outcome}")
+                step_results["classify"] = f"completed ({call_outcome})"
+            except Exception as e:
+                print(f"❌ STEP 5/8 FAILED — {e}")
+                call_outcome = "other"
+                step_results["classify"] = f"failed: {e}"
+
+        # ── STEP 6/8: GENERATE BUSINESS DECK ─────────────────────
+        # (moved before email so deck can be attached)
+        print("\n" + "=" * 60)
+        print("📋 STEP 6/8 — GENERATE BUSINESS DECK")
+        print("=" * 60)
+        await notify_ui(callback_url, AgentCallback(
+            agent_type=AgentType.SDR,
+            event="step_progress",
+            business_name=req.business_name,
+            message="Step 6/8 — Generating business deck...",
+        ))
+        deck_info = None
+        try:
+            deck_request = {
+                "session_id": session_id,
+                "business_name": req.business_name,
+                "research_summary": research_summary,
+                "call_transcript": call_transcript,
+                "call_outcome": call_outcome,
+                "contact_email": req.email or FALLBACK_EMAIL,
+                "meeting_date": datetime.now().isoformat(),
+                "template_style": req.deck_template,
+            }
+            async with httpx.AsyncClient(timeout=60.0) as http_client:
+                resp = await http_client.post(
+                    "http://localhost:8086/generate-deck",
+                    json=deck_request,
+                )
+                resp.raise_for_status()
+                deck_result = resp.json()
+
+            if deck_result.get("success"):
+                deck_info = {
+                    "filename": deck_result.get("filename", f"{req.business_name}_Business_Solution.pptx"),
+                    "content": deck_result.get("deck_content", {}),
+                    "file_data": deck_result.get("deck_file_b64", ""),
+                }
+                print(f"✅ STEP 6/8 COMPLETED — Deck: {deck_info['filename']}")
+                step_results["deck"] = "completed"
+            else:
+                print(f"❌ STEP 6/8 — Deck generator returned failure: {deck_result.get('error')}")
+                step_results["deck"] = f"failed: {deck_result.get('error')}"
+        except Exception as e:
+            print(f"❌ STEP 6/8 FAILED — {e}")
+            step_results["deck"] = f"failed: {e}"
+
+        # ── STEP 7/8: SEND EMAIL ─────────────────────────────────
+        print("\n" + "=" * 60)
+        print("📋 STEP 7/8 — SEND EMAIL")
+        print("=" * 60)
+        await notify_ui(callback_url, AgentCallback(
+            agent_type=AgentType.SDR,
+            event="step_progress",
+            business_name=req.business_name,
+            message="Step 7/8 — Sending outreach email...",
+        ))
+        try:
+            # Determine email address
             email_to_use = req.email
             if not email_to_use and call_transcript:
-                import re
-                
-                # Number word mappings for email extraction
-                number_words = {
-                    # Basic digits
-                    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4', 
-                    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
-                    # Teens
-                    'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13', 
-                    'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17', 
-                    'eighteen': '18', 'nineteen': '19',
-                    # Tens
-                    'twenty': '20', 'thirty': '30', 'forty': '40', 'fifty': '50',
-                    'sixty': '60', 'seventy': '70', 'eighty': '80', 'ninety': '90',
-                    # Common compound numbers
-                    'twenty one': '21', 'twenty two': '22', 'twenty three': '23', 'twenty four': '24', 'twenty five': '25',
-                    'twenty six': '26', 'twenty seven': '27', 'twenty eight': '28', 'twenty nine': '29',
-                    'thirty one': '31', 'thirty two': '32', 'thirty three': '33', 'thirty four': '34', 'thirty five': '35',
-                    'forty two': '42', 'fifty five': '55', 'sixty six': '66', 'seventy seven': '77', 'eighty eight': '88', 'ninety nine': '99',
-                    # Alternative spellings
-                    'oh': '0', 'nought': '0', 'naught': '0',
-                    # Common in email contexts
-                    'hundred': '100', 'double zero': '00', 'triple zero': '000'
-                }
-                
-                # Look for email patterns in the transcript with multiple patterns
-                email_patterns = [
-                    r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Standard email
-                    r'\b[A-Za-z0-9._%+-]+\s*at\s*[A-Za-z0-9.-]+\s*dot\s*[A-Z|a-z]{2,}\b',  # "john at gmail dot com"
-                    r'\b[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}\b',  # Spaced email
-                    # Complex pattern for "username words numbers at domain dot com"
-                    r'\b[A-Za-z0-9._%+-]+(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|\d+))*\s+at\s+[A-Za-z0-9.-]+\s+dot\s+[A-Z|a-z]{2,}\b'
-                ]
-                
-                emails_found = []
-                
-                # First try standard email pattern
-                standard_matches = re.findall(email_patterns[0], call_transcript, re.IGNORECASE)
-                emails_found.extend(standard_matches)
-                
-                # Then try complex spoken email pattern with number words
-                complex_pattern = r'\b([A-Za-z0-9._%+-]+(?:\s+(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|\d+))*)\s+at\s+([A-Za-z0-9.-]+)\s+dot\s+([A-Z|a-z]{2,})\b'
-                complex_matches = re.findall(complex_pattern, call_transcript, re.IGNORECASE)
-                
-                for username_part, domain_part, tld_part in complex_matches:
-                    # Convert number words to digits in username
-                    username_clean = username_part
-                    for word, digit in number_words.items():
-                        username_clean = re.sub(r'\b' + word + r'\b', digit, username_clean, flags=re.IGNORECASE)
-                    username_clean = re.sub(r'\s+', '', username_clean)  # Remove spaces
-                    
-                    clean_email = f"{username_clean}@{domain_part}.{tld_part}"
-                    emails_found.append(clean_email)
-                
-                # Then try simple "at" and "dot" variations  
-                for pattern in email_patterns[1:3]:  # Skip the complex one we handled above
-                    matches = re.findall(pattern, call_transcript, re.IGNORECASE)
-                    for match in matches:
-                        # Clean up "at" and "dot" variations
-                        clean_email = re.sub(r'\s*at\s*', '@', match, flags=re.IGNORECASE)
-                        clean_email = re.sub(r'\s*dot\s*', '.', clean_email, flags=re.IGNORECASE)
-                        clean_email = re.sub(r'\s+', '', clean_email)  # Remove all spaces
-                        emails_found.append(clean_email)
-                
-                if emails_found:
-                    email_to_use = emails_found[0]  # Use the first email found
-                    print(f"📧 Extracted email from transcript: {email_to_use}")
-                    print(f"📝 Available emails found: {emails_found}")
-                    # Find the original match in transcript for context
-                    for original_match in re.findall(r'[A-Za-z0-9._%+-]+[\s@]*[at@][\s@]*[A-Za-z0-9.-]+[\s.]*[dot.][\s.]*[A-Z|a-z]{2,}', call_transcript, re.IGNORECASE):
-                        print(f"📝 Original transcript match: '{original_match}' -> '{email_to_use}'")
-                        break
-                else:
-                    print("❌ No email pattern found in transcript")
-                    print(f"📝 Transcript preview: {call_transcript[:500]}...")
-                    # Try to find any potential email-like patterns for debugging
-                    debug_patterns = [r'[A-Za-z0-9._%+-]+[@at][A-Za-z0-9.-]+[.dot][A-Za-z]{2,}', r'email', r'@', r'gmail', r'yahoo', r'outlook']
-                    for debug_pattern in debug_patterns:
-                        debug_matches = re.findall(debug_pattern, call_transcript, re.IGNORECASE)
-                        if debug_matches:
-                            print(f"🔍 Found potential email indicators: {debug_matches}")
-                            break
-            
-            print(f"Final email to use: {email_to_use}")
-            print("========================\\n")
-            
+                found_emails = extract_emails_from_transcript(call_transcript)
+                if found_emails:
+                    email_to_use = found_emails[0]
+                    print(f"📧 Using email extracted from transcript: {email_to_use}")
+            if not email_to_use and FALLBACK_EMAIL:
+                email_to_use = FALLBACK_EMAIL
+                print(f"⚠️  Using FALLBACK_EMAIL: {email_to_use}")
+
             if not email_to_use:
-                print("No email address available - neither from business data nor transcript")
-                return json.dumps({
-                    "success": False,
-                    "error": f"No email address available for {req.business_name}",
-                    "message": "Business contact information incomplete and no email provided during call"
-                })
-            
-            try:
-                result = await send_email(
-                    to_email=email_to_use,
-                    subject=subject,
-                    html_body=html_body,
-                    business_name=req.business_name,
-                )
-                print(f"Email result: {result}")
-                return result
-            except Exception as e:
-                print(f"EMAIL ERROR: {e}")
-                import traceback
-                traceback.print_exc()
-                return json.dumps({
-                    "success": False,
-                    "error": str(e),
-                    "message": f"Email failed to send to {email_to_use}"
-                })
-        tools.append(send_outreach_email)
+                raise ValueError("No email address available")
 
-        # Save tool
-        def save_sdr_result(
-            research_summary: str = "",
-            proposal_summary: str = "",
-            call_transcript: str = "",
-            call_outcome: str = "other",
-            email_result: str = "",
-            email_subject: str = "",
-        ) -> str:
-            """Save the SDR session results."""
-            print(f"\\n=== SAVE TOOL DEBUG ===")
-            print(f"Session ID: {session_id}")
-            print(f"Business: {req.business_name}")
-            print(f"Place ID: {req.place_id}")
-            print(f"Research length: {len(research_summary)} chars")
-            print(f"Proposal length: {len(proposal_summary)} chars") 
-            print(f"Call transcript length: {len(call_transcript)} chars")
-            print(f"Call outcome: {call_outcome}")
-            print(f"Email result: {email_result[:200]}..." if email_result else "No email result")
-            print(f"Email subject: {email_subject}")
-            print("=======================\\n")
-            
-            try:
-                # Parse email result to determine if email was sent successfully
-                email_sent = False
-                if email_result:
-                    try:
-                        email_data = json.loads(email_result)
-                        email_sent = email_data.get("success", False)
-                    except:
-                        email_sent = "success" in email_result.lower() and "error" not in email_result.lower()
-                
-                session_data = {
-                    "session_id": session_id,
-                    "lead_place_id": req.place_id,
-                    "business_name": req.business_name,
-                    "research_summary": research_summary[:5000],
-                    "proposal_summary": proposal_summary[:5000],
-                    "call_transcript": call_transcript[:5000],
-                    "call_outcome": call_outcome,
-                    "email_sent": email_sent,
-                    "email_subject": email_subject,
-                    "created_at": datetime.utcnow().isoformat(),
+            # Generate email subject + body with LLM
+            email_subject = f"Website Proposal for {req.business_name} — RapidReach"
+
+            # Build a concise HTML body from the proposal
+            proposal_preview = proposal_content[:2000] if proposal_content else ""
+            call_summary = ""
+            if call_transcript:
+                call_summary = f"""
+                <p>Following up on our recent phone conversation, we're excited to share our
+                tailored website solution for {req.business_name}.</p>
+                """
+            else:
+                call_summary = f"""
+                <p>We've been researching {req.business_name} and believe we can help you
+                establish a stronger online presence.</p>
+                """
+
+            html_body = f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #2563eb;">Website Proposal for {req.business_name}</h2>
+                {call_summary}
+                <h3>Our Proposal</h3>
+                <div style="background: #f8fafc; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                    {proposal_preview.replace(chr(10), '<br>')}
+                </div>
+                <p>We've also attached a detailed presentation deck for your review.</p>
+                <p>Looking forward to discussing this with you!</p>
+                <br>
+                <p>Best regards,<br><strong>The RapidReach Team</strong></p>
+            </div>
+            """
+
+            # Build attachment from deck
+            attachment_data = None
+            if deck_info and deck_info.get("file_data"):
+                attachment_data = {
+                    "filename": deck_info["filename"],
+                    "content_b64": deck_info["file_data"],
+                    "mimetype": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 }
-                
-                print("Creating SDRResult object...")
-                # Update in-memory
-                sdr_sessions[session_id] = SDRResult(**session_data)
-                print("In-memory update successful")
-                
-                print("Saving to BigQuery...")
-                # Persist to BQ
-                result = save_sdr_session(session_data)
-                print(f"BigQuery save result: {result}")
-                
-                return result
-                
-            except Exception as e:
-                print(f"SAVE ERROR: {e}")
-                import traceback
-                traceback.print_exc()
-                return f"Save failed: {str(e)}"
+                print(f"📎 Attaching deck: {attachment_data['filename']}")
 
-        tools.append(save_sdr_result)
+            # Generate calendar invite
+            meeting_dt = extract_meeting_time_from_transcript(call_transcript)
+            from common.config import SALES_EMAIL as _sales_email
+            calendar_ics = generate_ics(
+                start=meeting_dt,
+                duration_minutes=30,
+                summary=f"RapidReach — Follow-up with {req.business_name}",
+                description=f"Follow-up discussion about our website proposal for {req.business_name}. Presented by the RapidReach Team.",
+                attendee_email=email_to_use,
+                organizer_email=_sales_email or "",
+            )
+            print(f"📅 Calendar invite for {meeting_dt.strftime('%A %B %d at %I:%M %p')}")
 
-        print(f"\\n=== STARTING DEDALUS RUNNER ===")
-        print(f"Business: {req.business_name}")
-        print(f"Total tools: {len(tools)}")
-        print(f"Max steps: 20")  # Increased from 15
-        print(f"Model: {DEFAULT_MODEL}")
-        print(f"Skip call: {req.skip_call}")
-        print("Expected steps: 1=Research, 2=Draft, 3=Fact-check, 4=Call, 5=Classify, 6=Email, 7=Save")
-        print("==============================\\n")
+            email_result = await send_email(
+                to_email=email_to_use,
+                subject=email_subject,
+                html_body=html_body,
+                business_name=req.business_name,
+                attachment_data=attachment_data,
+                calendar_ics=calendar_ics,
+            )
+            print(f"✅ STEP 7/8 COMPLETED — Email sent to {email_to_use}")
+            step_results["email"] = f"completed (to {email_to_use})"
+        except Exception as e:
+            print(f"❌ STEP 7/8 FAILED — {e}")
+            import traceback
+            traceback.print_exc()
+            email_result = json.dumps({"success": False, "error": str(e)})
+            step_results["email"] = f"failed: {e}"
 
-        # Initial workflow execution
-        result = await runner.run(
-            input=instructions,
-            model=DEFAULT_MODEL,
-            tools=tools,
-            max_steps=25,
-        )
-
-        final_output = result.final_output if result.final_output else ""
-        print(f"Initial workflow completed. Checking step completion...")
-
-        # Define expected confirmations and step retry logic
-        expected_confirmations = [
-            "✅ STEP 1/7 COMPLETED",
-            "✅ STEP 2/7 COMPLETED", 
-            "✅ STEP 3/7 COMPLETED",
-            "✅ STEP 7/7 COMPLETED"
-        ]
-        if not req.skip_call:
-            expected_confirmations.extend([
-                "✅ STEP 4/7 COMPLETED",
-                "✅ STEP 5/7 COMPLETED"
-            ])
-        expected_confirmations.append("✅ STEP 6/7 COMPLETED")
-
-        # Step-specific retry instructions
-        step_retry_instructions = {
-            "✅ STEP 1/7 COMPLETED": f"You must complete STEP 1/7 - RESEARCH. Call research_business('{req.business_name}', '{req.city}', '{req.address}') and confirm with '✅ STEP 1/7 COMPLETED - Research finished'",
-            "✅ STEP 2/7 COMPLETED": f"You must complete STEP 2/7 - DRAFT PROPOSAL. Call draft_proposal('{req.business_name}', research_summary) and confirm with '✅ STEP 2/7 COMPLETED - Proposal drafted'",
-            "✅ STEP 3/7 COMPLETED": f"You must complete STEP 3/7 - FACT-CHECK. Call fact_check_proposal(proposal_content, '{req.business_name}', research_summary) and confirm with '✅ STEP 3/7 COMPLETED - Proposal fact-checked'",
-            "✅ STEP 4/7 COMPLETED": f"You must complete STEP 4/7 - PHONE CALL. Call call_business(research_summary, proposal_content) and confirm with '✅ STEP 4/7 COMPLETED - Phone call to {req.phone} finished'",
-            "✅ STEP 5/7 COMPLETED": f"You must complete STEP 5/7 - CLASSIFY CALL. Extract transcript from call_result, call classify_call_outcome(transcript, '{req.business_name}') and confirm with '✅ STEP 5/7 COMPLETED - Call outcome classified'",
-            "✅ STEP 6/7 COMPLETED": f"You must complete STEP 6/7 - SEND EMAIL. Call send_outreach_email(subject, html_body, call_transcript) and confirm with '✅ STEP 6/7 COMPLETED - Email sent'",
-            "✅ STEP 7/7 COMPLETED": f"You must complete STEP 7/7 - SAVE SESSION. Call save_sdr_result(research_summary, proposal_content, call_transcript, call_outcome, email_result, email_subject) and confirm with '✅ STEP 7/7 COMPLETED - Session saved to database'"
-        }
-
-        # Check for missing steps and retry individually
-        max_step_retries = 3
-        
-        for retry_round in range(max_step_retries):
-            missing_steps = []
-            for confirmation in expected_confirmations:
-                if confirmation not in str(final_output):
-                    missing_steps.append(confirmation)
-            
-            if not missing_steps:
-                print(f"🎉 All {len(expected_confirmations)} steps completed successfully!")
-                break
-                
-            print(f"\\n=== STEP RETRY ROUND {retry_round + 1}/{max_step_retries} ===")
-            print(f"Missing steps: {[step.split('✅ ')[1].split(' COMPLETED')[0] for step in missing_steps]}")
-            
-            # Retry each missing step individually
-            for missing_step in missing_steps:
-                step_name = missing_step.split("✅ ")[1].split(" COMPLETED")[0]
-                print(f"\\n🔄 Retrying {step_name}...")
-                
-                retry_instruction = step_retry_instructions.get(missing_step, f"Complete the missing step: {step_name}")
-                
+        # ── STEP 8/8: SAVE SESSION ───────────────────────────────
+        print("\n" + "=" * 60)
+        print("📋 STEP 8/8 — SAVE SESSION")
+        print("=" * 60)
+        await notify_ui(callback_url, AgentCallback(
+            agent_type=AgentType.SDR,
+            event="step_progress",
+            business_name=req.business_name,
+            message="Step 8/8 — Saving session to database...",
+        ))
+        try:
+            email_sent = False
+            if email_result:
                 try:
-                    step_result = await runner.run(
-                        input=f"""CRITICAL: You must complete this specific step that was missed in the previous workflow.
+                    email_data = json.loads(email_result)
+                    email_sent = email_data.get("success", False)
+                except Exception:
+                    email_sent = "success" in email_result.lower()
 
-Previous context available - use any data from previous steps as needed.
-Business: {req.business_name}
+            session_data = {
+                "session_id": session_id,
+                "lead_place_id": req.place_id,
+                "business_name": req.business_name,
+                "research_summary": research_summary[:5000],
+                "proposal_summary": proposal_content[:5000],
+                "call_transcript": call_transcript[:5000],
+                "call_outcome": call_outcome,
+                "email_sent": email_sent,
+                "email_subject": email_subject,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            sdr_sessions[session_id] = SDRResult(**session_data)
+            if deck_info:
+                sd = sdr_sessions[session_id].dict()
+                sd["deck_info"] = deck_info
+                sdr_sessions[session_id] = SDRResult(**sd)
 
-TASK: {retry_instruction}
+            save_result = save_sdr_session(session_data)
+            print(f"✅ STEP 8/8 COMPLETED — Session saved ({save_result})")
+            step_results["save"] = "completed"
+        except Exception as e:
+            print(f"❌ STEP 8/8 FAILED — {e}")
+            import traceback
+            traceback.print_exc()
+            step_results["save"] = f"failed: {e}"
 
-You must provide the EXACT confirmation message: {missing_step}
+        # ── FINAL SUMMARY ────────────────────────────────────────
+        print("\n" + "=" * 60)
+        print("🏁 SDR PIPELINE COMPLETE")
+        print("=" * 60)
+        for step_name, status in step_results.items():
+            icon = "✅" if "completed" in status else ("⏭️" if "skipped" in status else "❌")
+            print(f"  {icon} {step_name}: {status}")
+        print("=" * 60 + "\n")
 
-Complete this step now.""",
-                        model=DEFAULT_MODEL,
-                        tools=tools,
-                        max_steps=5,
-                    )
-                    
-                    step_output = step_result.final_output if step_result.final_output else ""
-                    
-                    if missing_step in step_output:
-                        print(f"✅ {step_name} retry successful")
-                        final_output += f"\\n\\n{step_output}"
-                    else:
-                        print(f"❌ {step_name} retry failed - confirmation not found")
-                        final_output += f"\\n\\n{step_output}"
-                        
-                except Exception as e:
-                    print(f"❌ {step_name} retry failed with error: {e}")
-                    final_output += f"\\n\\nStep retry error for {step_name}: {str(e)}"
+        final_output = f"""SDR Pipeline completed for {req.business_name}
 
-        # Final validation
-        final_missing_steps = []
-        for confirmation in expected_confirmations:
-            if confirmation not in str(final_output):
-                final_missing_steps.append(confirmation)
-
-        print(f"\\n=== DEDALUS RUNNER COMPLETED ===")
-        print(f"Final result length: {len(final_output)} chars")
-        
-        if final_missing_steps:
-            print(f"⚠️  FINAL WARNING: Missing step confirmations: {[step.split('✅ ')[1].split(' COMPLETED')[0] for step in final_missing_steps]}")
-        else:
-            print(f"✅ All expected steps confirmed in final output")
-        print("===============================\\n")
+Step Results:
+""" + "\n".join(
+            f"  {'✅' if 'completed' in s else ('⏭️' if 'skipped' in s else '❌')} {n}: {s}"
+            for n, s in step_results.items()
+        )
 
         # Notify UI: completed
         await notify_ui(callback_url, AgentCallback(
@@ -769,6 +938,7 @@ Complete this step now.""",
             data={
                 "session_id": session_id,
                 "summary": final_output[:1000] if final_output else "",
+                "step_results": step_results,
             },
         ))
 
@@ -780,6 +950,7 @@ Complete this step now.""",
             "status": "success",
             "session_id": session_id,
             "business_name": req.business_name,
+            "step_results": step_results,
             "summary": final_output,
         }
 

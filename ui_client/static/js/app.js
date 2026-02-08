@@ -269,6 +269,7 @@ async function findLeads() {
 
 async function startSDR(name, placeId, email, address, city) {
     const skipCall = document.getElementById('skip-call')?.checked ?? false;
+    const deckTemplate = document.getElementById('deck-template')?.value ?? 'professional';
 
     // Read phone from the editable input field (user may have changed it)
     const phoneInput = document.getElementById(`phone-${placeId}`);
@@ -286,6 +287,7 @@ async function startSDR(name, placeId, email, address, city) {
                 city: city,
                 place_id: placeId,
                 skip_call: skipCall,
+                deck_template: deckTemplate,
             }),
         });
         const data = await resp.json();

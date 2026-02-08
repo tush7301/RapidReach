@@ -38,6 +38,7 @@ class AgentType(str, Enum):
     LEAD_MANAGER = "lead_manager"
     GMAIL_LISTENER = "gmail_listener"
     CALENDAR = "calendar"
+    DECK_GENERATOR = "deck_generator"
 
 
 # ── Core Data Models ─────────────────────────────────────────
@@ -167,6 +168,7 @@ class SDRRequest(BaseModel):
     lead_context: str = ""
     callback_url: str = ""
     skip_call: bool = False
+    deck_template: str = "professional"
 
 
 class ProcessEmailsRequest(BaseModel):
