@@ -173,14 +173,17 @@ function renderLeadsTable() {
     state.businesses.forEach(biz => {
         const tr = document.createElement('tr');
         const status = biz.lead_status || 'new';
+        const pid = escapeHtml(biz.place_id || '');
         tr.innerHTML = `
             <td><strong>${escapeHtml(biz.business_name || '')}</strong></td>
             <td>${escapeHtml(biz.address || '')}</td>
-            <td>${escapeHtml(biz.phone || '—')}</td>
+            <td>
+                <input type="text" class="phone-input" id="phone-${pid}" value="${escapeHtml(biz.phone || '')}" placeholder="Enter phone" style="width:130px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.85rem;" />
+            </td>
             <td>${biz.rating ? biz.rating.toFixed(1) + ' ⭐' : '—'}</td>
             <td><span class="status status-${status}">${status.replace('_', ' ')}</span></td>
             <td>
-                <button class="btn btn-primary btn-small" onclick="startSDR('${escapeHtml(biz.business_name)}', '${escapeHtml(biz.phone || '')}', '${escapeHtml(biz.email || '')}', '${escapeHtml(biz.address || '')}', '${escapeHtml(biz.city || '')}', '${escapeHtml(biz.place_id || '')}')">
+                <button class="btn btn-primary btn-small" onclick="startSDR('${escapeHtml(biz.business_name)}', '${pid}', '${escapeHtml(biz.email || '')}', '${escapeHtml(biz.address || '')}', '${escapeHtml(biz.city || '')}')">
                     Run SDR
                 </button>
             </td>
@@ -226,8 +229,12 @@ async function findLeads() {
     enableButtons();
 }
 
-async function startSDR(name, phone, email, address, city, placeId) {
+async function startSDR(name, placeId, email, address, city) {
     const skipCall = document.getElementById('skip-call')?.checked ?? false;
+
+    // Read phone from the editable input field (user may have changed it)
+    const phoneInput = document.getElementById(`phone-${placeId}`);
+    const phone = phoneInput ? phoneInput.value.trim() : '';
 
     try {
         const resp = await fetch('/start_sdr', {
