@@ -59,56 +59,162 @@ RapidReach is a **fully autonomous SDR (Sales Development Representative)** that
 
 ```mermaid
 graph TB
-    subgraph "🖥️ Frontend"
-        UI["UI Client Dashboard<br/>:8000"]
+    subgraph "🖥️ Frontend — Dashboard"
+        UI["🖥️ UI Client<br/>FastAPI + Jinja2<br/>:8000"]
+        WS["🔌 WebSocket<br/>Real-time Events"]
+        JS["📱 Vanilla JS<br/>Dark Theme UI"]
     end
 
-    subgraph "🔍 Discovery"
-        LF["Lead Finder<br/>:8081"]
-        MAPS["Google Maps<br/>Places API"]
+    subgraph "🔍 Lead Discovery Engine"
+        LF["🔍 Lead Finder<br/>Agent Service<br/>:8081"]
+        DEDUP["🔄 Smart Dedup<br/>Merge Engine"]
     end
 
-    subgraph "🧠 Outreach Pipeline"
-        SDR["SDR Agent<br/>:8084"]
-        DG["Deck Generator<br/>:8086"]
-        BRAVE["Brave Search<br/>MCP Server"]
-        XI["ElevenLabs<br/>Voice AI"]
-        GMAIL_SEND["Gmail API<br/>Send"]
+    subgraph "🧠 SDR Outreach Pipeline"
+        SDR["🧠 SDR Agent<br/>Coordinator<br/>:8084"]
+        RESEARCH["📚 Research<br/>Specialist"]
+        DRAFT["✍️ Proposal<br/>Writer"]
+        FACTCHECK["✅ Fact-Check<br/>Validator"]
+        CLASSIFY["🏷️ Call Outcome<br/>Classifier"]
     end
 
-    subgraph "📬 Inbound Processing"
-        GL["Gmail Listener<br/>:8083"]
-        LM["Lead Manager<br/>:8082"]
-        GCAL["Google Calendar<br/>+ Meet"]
+    subgraph "📊 Deck Generation"
+        DG["📊 Deck Generator<br/>python-pptx<br/>:8086"]
+        PPTX["📄 .pptx Builder<br/>Slide Templates"]
     end
 
-    subgraph "💾 Data Layer"
-        BQ["Google BigQuery"]
+    subgraph "📬 Inbound Email Processing"
+        GL["📬 Gmail Listener<br/>:8083"]
+        LM["📋 Lead Manager<br/>:8082"]
+        EMAILAI["🤖 Email Analyzer<br/>Intent Detection"]
     end
 
+    subgraph "☁️ Google Cloud Platform"
+        MAPS["🗺️ Google Maps<br/>Places API"]
+        BQ["💾 BigQuery<br/>Data Warehouse"]
+        GMAIL_SEND["📧 Gmail API<br/>MIME + Attachments"]
+        GMAIL_READ["📥 Gmail API<br/>Read + Mark"]
+        GCAL["📅 Google Calendar<br/>API"]
+        GMEET["🎥 Google Meet<br/>Video Links"]
+        PUBSUB["📡 Cloud Pub/Sub<br/>Push Notifications"]
+        OAUTH["🔐 OAuth2 / Service<br/>Account Auth"]
+    end
+
+    subgraph "🤖 Dedalus Labs — AI Orchestration"
+        DEDALUS["⚡ Dedalus ADK<br/>DedalusRunner"]
+        GPT["🧠 OpenAI GPT-4.1<br/>Research + Classify"]
+        CLAUDE["✨ Anthropic Claude<br/>Sonnet 4 — Drafting"]
+        PYDANTIC["📋 Pydantic v2<br/>Structured Outputs"]
+    end
+
+    subgraph "🔍 Brave Software — Web Search"
+        BRAVE["🌐 Brave Search<br/>MCP Server"]
+    end
+
+    subgraph "🎙️ ElevenLabs — Voice AI"
+        XI_CALL["📞 Conversational AI<br/>Phone Calls"]
+        XI_BATCH["📋 Batch Call API<br/>+ Transcript Polling"]
+    end
+
+    subgraph "📎 Email Attachments"
+        ICS["📅 .ics Calendar<br/>Invite Generator"]
+    end
+
+    %% Frontend connections
+    UI --- WS
+    UI --- JS
     UI -->|"Find Leads"| LF
     UI -->|"Run SDR"| SDR
     UI -->|"Process Inbox"| LM
+
+    %% Lead Finder flow
     LF --> MAPS
+    LF --> DEDUP
     LF --> BQ
-    SDR --> BRAVE
-    SDR --> XI
-    SDR --> GMAIL_SEND
-    SDR --> DG
-    SDR --> BQ
-    GL -->|"New Email"| LM
-    LM --> GCAL
-    LM --> BQ
     LF -.->|"callback"| UI
+
+    %% SDR Pipeline flow
+    SDR --> RESEARCH
+    SDR --> DRAFT
+    SDR --> FACTCHECK
+    SDR --> CLASSIFY
+    RESEARCH --> BRAVE
+    RESEARCH --> DEDALUS
+    DRAFT --> CLAUDE
+    FACTCHECK --> GPT
+    CLASSIFY --> GPT
+    CLASSIFY --> PYDANTIC
+    SDR --> XI_CALL
+    XI_CALL --> XI_BATCH
+    SDR --> DG
+    DG --> PPTX
+    DG --> GPT
+    SDR --> GMAIL_SEND
+    SDR --> ICS
+    SDR --> BQ
     SDR -.->|"callback"| UI
+
+    %% Dedalus orchestration
+    DEDALUS --> GPT
+    DEDALUS --> CLAUDE
+
+    %% Inbound flow
+    PUBSUB -->|"push"| GL
+    GL -->|"new email"| LM
+    LM --> GMAIL_READ
+    LM --> EMAILAI
+    EMAILAI --> GPT
+    LM --> GCAL
+    GCAL --> GMEET
+    LM --> BQ
     LM -.->|"callback"| UI
 
+    %% Auth
+    OAUTH -.-> GMAIL_SEND
+    OAUTH -.-> GMAIL_READ
+    OAUTH -.-> GCAL
+    OAUTH -.-> BQ
+
+    %% Styles — Our Services (purple/indigo)
     style UI fill:#6366f1,stroke:#4f46e5,color:#fff
-    style SDR fill:#f59e0b,stroke:#d97706,color:#000
+    style WS fill:#818cf8,stroke:#6366f1,color:#fff
+    style JS fill:#818cf8,stroke:#6366f1,color:#fff
     style LF fill:#10b981,stroke:#059669,color:#fff
-    style LM fill:#ef4444,stroke:#dc2626,color:#fff
+    style DEDUP fill:#34d399,stroke:#10b981,color:#000
+    style SDR fill:#f59e0b,stroke:#d97706,color:#000
+    style RESEARCH fill:#fbbf24,stroke:#f59e0b,color:#000
+    style DRAFT fill:#fbbf24,stroke:#f59e0b,color:#000
+    style FACTCHECK fill:#fbbf24,stroke:#f59e0b,color:#000
+    style CLASSIFY fill:#fbbf24,stroke:#f59e0b,color:#000
     style DG fill:#8b5cf6,stroke:#7c3aed,color:#fff
-    style BQ fill:#3b82f6,stroke:#2563eb,color:#fff
+    style PPTX fill:#a78bfa,stroke:#8b5cf6,color:#fff
+    style GL fill:#f87171,stroke:#ef4444,color:#fff
+    style LM fill:#ef4444,stroke:#dc2626,color:#fff
+    style EMAILAI fill:#fca5a5,stroke:#ef4444,color:#000
+    style ICS fill:#c4b5fd,stroke:#8b5cf6,color:#000
+
+    %% Styles — Google Cloud (blue)
+    style MAPS fill:#4285F4,stroke:#1a73e8,color:#fff
+    style BQ fill:#4285F4,stroke:#1a73e8,color:#fff
+    style GMAIL_SEND fill:#4285F4,stroke:#1a73e8,color:#fff
+    style GMAIL_READ fill:#4285F4,stroke:#1a73e8,color:#fff
+    style GCAL fill:#4285F4,stroke:#1a73e8,color:#fff
+    style GMEET fill:#4285F4,stroke:#1a73e8,color:#fff
+    style PUBSUB fill:#4285F4,stroke:#1a73e8,color:#fff
+    style OAUTH fill:#4285F4,stroke:#1a73e8,color:#fff
+
+    %% Styles — Dedalus Labs (teal)
+    style DEDALUS fill:#0d9488,stroke:#0f766e,color:#fff
+    style GPT fill:#0d9488,stroke:#0f766e,color:#fff
+    style CLAUDE fill:#0d9488,stroke:#0f766e,color:#fff
+    style PYDANTIC fill:#0d9488,stroke:#0f766e,color:#fff
+
+    %% Styles — Brave (orange)
+    style BRAVE fill:#fb542b,stroke:#e04420,color:#fff
+
+    %% Styles — ElevenLabs (dark)
+    style XI_CALL fill:#1a1a2e,stroke:#16213e,color:#fff
+    style XI_BATCH fill:#1a1a2e,stroke:#16213e,color:#fff
 ```
 
 ### Service Overview
