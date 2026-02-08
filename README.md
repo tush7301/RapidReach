@@ -58,163 +58,97 @@ RapidReach is a **fully autonomous SDR (Sales Development Representative)** that
 ### High-Level Service Map
 
 ```mermaid
-graph TB
-    subgraph "🖥️ Frontend — Dashboard"
-        UI["🖥️ UI Client<br/>FastAPI + Jinja2<br/>:8000"]
-        WS["🔌 WebSocket<br/>Real-time Events"]
-        JS["📱 Vanilla JS<br/>Dark Theme UI"]
+graph LR
+    subgraph "🖥️ Dashboard"
+        UI["🖥️ UI Client<br/>WebSocket + FastAPI"]
     end
 
-    subgraph "🔍 Lead Discovery Engine"
-        LF["🔍 Lead Finder<br/>Agent Service<br/>:8081"]
-        DEDUP["🔄 Smart Dedup<br/>Merge Engine"]
+    subgraph "🤖 AI Agents — Powered by Dedalus Labs ADK"
+        LF["🔍 Lead Finder<br/>Agent"]
+        SDR["🧠 SDR Coordinator<br/>Agent"]
+        RA["📚 Research<br/>Agent"]
+        PA["✍️ Proposal<br/>Agent"]
+        FA["✅ Fact-Check<br/>Agent"]
+        CA["🏷️ Classifier<br/>Agent"]
+        DA["📊 Deck Generator<br/>Agent"]
+        LM["📋 Lead Manager<br/>Agent"]
+        EA["🤖 Email Analyzer<br/>Agent"]
     end
 
-    subgraph "🧠 SDR Outreach Pipeline"
-        SDR["🧠 SDR Agent<br/>Coordinator<br/>:8084"]
-        RESEARCH["📚 Research<br/>Specialist"]
-        DRAFT["✍️ Proposal<br/>Writer"]
-        FACTCHECK["✅ Fact-Check<br/>Validator"]
-        CLASSIFY["🏷️ Call Outcome<br/>Classifier"]
+    subgraph "🎙️ ElevenLabs Voice AI"
+        XI["📞 Conversational AI<br/>Phone Calls + Transcripts"]
     end
 
-    subgraph "📊 Deck Generation"
-        DG["📊 Deck Generator<br/>python-pptx<br/>:8086"]
-        PPTX["📄 .pptx Builder<br/>Slide Templates"]
-    end
-
-    subgraph "📬 Inbound Email Processing"
-        GL["📬 Gmail Listener<br/>:8083"]
-        LM["📋 Lead Manager<br/>:8082"]
-        EMAILAI["🤖 Email Analyzer<br/>Intent Detection"]
+    subgraph "🌐 Brave Search MCP"
+        BRAVE["🔍 Web Research<br/>MCP Server"]
     end
 
     subgraph "☁️ Google Cloud Platform"
-        MAPS["🗺️ Google Maps<br/>Places API"]
-        BQ["💾 BigQuery<br/>Data Warehouse"]
-        GMAIL_SEND["📧 Gmail API<br/>MIME + Attachments"]
-        GMAIL_READ["📥 Gmail API<br/>Read + Mark"]
-        GCAL["📅 Google Calendar<br/>API"]
-        GMEET["🎥 Google Meet<br/>Video Links"]
-        PUBSUB["📡 Cloud Pub/Sub<br/>Push Notifications"]
-        OAUTH["🔐 OAuth2 / Service<br/>Account Auth"]
+        MAPS["🗺️ Maps Places API"]
+        BQ["💾 BigQuery"]
+        GMAIL["📧 Gmail API"]
+        GCAL["📅 Calendar + Meet"]
+        PUBSUB["📡 Cloud Pub/Sub"]
     end
 
-    subgraph "🤖 Dedalus Labs — AI Orchestration"
-        DEDALUS["⚡ Dedalus ADK<br/>DedalusRunner"]
-        GPT["🧠 OpenAI GPT-4.1<br/>Research + Classify"]
-        CLAUDE["✨ Anthropic Claude<br/>Sonnet 4 — Drafting"]
-        PYDANTIC["📋 Pydantic v2<br/>Structured Outputs"]
-    end
-
-    subgraph "🔍 Brave Software — Web Search"
-        BRAVE["🌐 Brave Search<br/>MCP Server"]
-    end
-
-    subgraph "🎙️ ElevenLabs — Voice AI"
-        XI_CALL["📞 Conversational AI<br/>Phone Calls"]
-        XI_BATCH["📋 Batch Call API<br/>+ Transcript Polling"]
-    end
-
-    subgraph "📎 Email Attachments"
-        ICS["📅 .ics Calendar<br/>Invite Generator"]
-    end
-
-    %% Frontend connections
-    UI --- WS
-    UI --- JS
+    %% User triggers
     UI -->|"Find Leads"| LF
     UI -->|"Run SDR"| SDR
     UI -->|"Process Inbox"| LM
 
-    %% Lead Finder flow
-    LF --> MAPS
-    LF --> DEDUP
-    LF --> BQ
-    LF -.->|"callback"| UI
+    %% Lead Finder
+    LF -->|"discover"| MAPS
+    LF -->|"persist"| BQ
 
-    %% SDR Pipeline flow
-    SDR --> RESEARCH
-    SDR --> DRAFT
-    SDR --> FACTCHECK
-    SDR --> CLASSIFY
-    RESEARCH --> BRAVE
-    RESEARCH --> DEDALUS
-    DRAFT --> CLAUDE
-    FACTCHECK --> GPT
-    CLASSIFY --> GPT
-    CLASSIFY --> PYDANTIC
-    SDR --> XI_CALL
-    XI_CALL --> XI_BATCH
-    SDR --> DG
-    DG --> PPTX
-    DG --> GPT
-    SDR --> GMAIL_SEND
-    SDR --> ICS
-    SDR --> BQ
-    SDR -.->|"callback"| UI
+    %% SDR Pipeline
+    SDR --> RA
+    SDR --> PA
+    SDR --> FA
+    SDR --> CA
+    RA -->|"web search"| BRAVE
+    PA -->|"Claude Sonnet 4"| DA
+    SDR -->|"AI call"| XI
+    SDR -->|"send email + deck"| GMAIL
+    SDR -->|"save session"| BQ
 
-    %% Dedalus orchestration
-    DEDALUS --> GPT
-    DEDALUS --> CLAUDE
+    %% Deck
+    DA -->|".pptx"| SDR
 
-    %% Inbound flow
-    PUBSUB -->|"push"| GL
-    GL -->|"new email"| LM
-    LM --> GMAIL_READ
-    LM --> EMAILAI
-    EMAILAI --> GPT
-    LM --> GCAL
-    GCAL --> GMEET
+    %% Inbound
+    PUBSUB -->|"new email"| LM
+    LM --> EA
+    LM -->|"book meeting"| GCAL
     LM --> BQ
+
+    %% Callbacks
+    LF -.->|"callback"| UI
+    SDR -.->|"callback"| UI
     LM -.->|"callback"| UI
 
-    %% Auth
-    OAUTH -.-> GMAIL_SEND
-    OAUTH -.-> GMAIL_READ
-    OAUTH -.-> GCAL
-    OAUTH -.-> BQ
-
-    %% Styles — Our Services (purple/indigo)
-    style UI fill:#6366f1,stroke:#4f46e5,color:#fff
-    style WS fill:#818cf8,stroke:#6366f1,color:#fff
-    style JS fill:#818cf8,stroke:#6366f1,color:#fff
+    %% Styles — Agents (amber/yellow)
     style LF fill:#10b981,stroke:#059669,color:#fff
-    style DEDUP fill:#34d399,stroke:#10b981,color:#000
     style SDR fill:#f59e0b,stroke:#d97706,color:#000
-    style RESEARCH fill:#fbbf24,stroke:#f59e0b,color:#000
-    style DRAFT fill:#fbbf24,stroke:#f59e0b,color:#000
-    style FACTCHECK fill:#fbbf24,stroke:#f59e0b,color:#000
-    style CLASSIFY fill:#fbbf24,stroke:#f59e0b,color:#000
-    style DG fill:#8b5cf6,stroke:#7c3aed,color:#fff
-    style PPTX fill:#a78bfa,stroke:#8b5cf6,color:#fff
-    style GL fill:#f87171,stroke:#ef4444,color:#fff
+    style RA fill:#fbbf24,stroke:#f59e0b,color:#000
+    style PA fill:#fbbf24,stroke:#f59e0b,color:#000
+    style FA fill:#fbbf24,stroke:#f59e0b,color:#000
+    style CA fill:#fbbf24,stroke:#f59e0b,color:#000
+    style DA fill:#8b5cf6,stroke:#7c3aed,color:#fff
     style LM fill:#ef4444,stroke:#dc2626,color:#fff
-    style EMAILAI fill:#fca5a5,stroke:#ef4444,color:#000
-    style ICS fill:#c4b5fd,stroke:#8b5cf6,color:#000
+    style EA fill:#fca5a5,stroke:#ef4444,color:#000
+    style UI fill:#6366f1,stroke:#4f46e5,color:#fff
 
-    %% Styles — Google Cloud (blue)
+    %% Google Cloud (blue)
     style MAPS fill:#4285F4,stroke:#1a73e8,color:#fff
     style BQ fill:#4285F4,stroke:#1a73e8,color:#fff
-    style GMAIL_SEND fill:#4285F4,stroke:#1a73e8,color:#fff
-    style GMAIL_READ fill:#4285F4,stroke:#1a73e8,color:#fff
+    style GMAIL fill:#4285F4,stroke:#1a73e8,color:#fff
     style GCAL fill:#4285F4,stroke:#1a73e8,color:#fff
-    style GMEET fill:#4285F4,stroke:#1a73e8,color:#fff
     style PUBSUB fill:#4285F4,stroke:#1a73e8,color:#fff
-    style OAUTH fill:#4285F4,stroke:#1a73e8,color:#fff
 
-    %% Styles — Dedalus Labs (teal)
-    style DEDALUS fill:#0d9488,stroke:#0f766e,color:#fff
-    style GPT fill:#0d9488,stroke:#0f766e,color:#fff
-    style CLAUDE fill:#0d9488,stroke:#0f766e,color:#fff
-    style PYDANTIC fill:#0d9488,stroke:#0f766e,color:#fff
+    %% ElevenLabs (dark)
+    style XI fill:#1a1a2e,stroke:#16213e,color:#fff
 
-    %% Styles — Brave (orange)
+    %% Brave (orange)
     style BRAVE fill:#fb542b,stroke:#e04420,color:#fff
-
-    %% Styles — ElevenLabs (dark)
-    style XI_CALL fill:#1a1a2e,stroke:#16213e,color:#fff
-    style XI_BATCH fill:#1a1a2e,stroke:#16213e,color:#fff
 ```
 
 ### Service Overview
