@@ -42,10 +42,18 @@ async def send_email(
             "error": "SALES_EMAIL not configured in .env",
         })
 
+    print(f"\n=== EMAIL SENDING START ===")
+    print(f"To: {to_email}")
+    print(f"Subject: {subject}")
+    print(f"Business: {business_name}")
+    print(f"HTML body length: {len(html_body)} chars")
+    print("============================\n")
+
     service = get_gmail_service()
     if not service:
         return json.dumps({"success": False, "error": "Gmail OAuth2 not authorized. Run: PYTHONPATH=. python -m common.google_auth"})
-
+    
+    print(f"Preparing to send email to {to_email} for {business_name} with subject '{subject}'")
     try:
         message = MIMEMultipart("alternative")
         message["to"] = to_email

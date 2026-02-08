@@ -13,7 +13,7 @@ import logging
 import time
 from datetime import datetime
 
-from common.config import ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID
+from common.config import ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, ELEVENLABS_PHONE_NUMBER_ID
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ async def make_phone_call(
             "transcript": "",
             "outcome": "issue_appeared",
         })
-
+    print(f"Initiating call to {business_name} at {phone_number}")
     validated = _validate_phone(phone_number)
     if not validated:
         return json.dumps({
@@ -81,7 +81,7 @@ async def make_phone_call(
             "transcript": "",
             "outcome": "other",
         })
-
+    print("Placing call")
     try:
         from elevenlabs.client import ElevenLabs
         from elevenlabs.types import OutboundCallRecipient
@@ -90,7 +90,7 @@ async def make_phone_call(
         )
 
         el_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-
+        print("ElevenLabs client initialized, business_name:", business_name, "phone:", validated, "context:", context)
         # Build recipient with dynamic variables for the agent
         recipient = OutboundCallRecipient(
             phone_number=validated,
@@ -107,6 +107,7 @@ async def make_phone_call(
         batch = el_client.conversational_ai.batch_calls.create(
             call_name=f"SDR Call — {business_name}",
             agent_id=ELEVENLABS_AGENT_ID,
+            agent_phone_number_id=ELEVENLABS_PHONE_NUMBER_ID,
             recipients=[recipient],
         )
 
@@ -168,6 +169,18 @@ async def make_phone_call(
 
             except Exception as t_err:
                 logger.warning(f"Failed to fetch transcript: {t_err}")
+
+        
+        print(json.dumps({
+            "success": True,
+            "phone_number": validated,
+            "business_name": business_name,
+            "transcript": transcript or "(call completed, transcript unavailable)",
+            "conversation_id": conversation_id,
+            "batch_id": batch_id,
+            "status": call_status,
+            "called_at": datetime.utcnow().isoformat(),
+        }))
 
         return json.dumps({
             "success": True,
