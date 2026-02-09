@@ -1,12 +1,10 @@
-# ⚡ RapidReach — AI-Powered SDR Agent System
+# RapidReach — AI-Powered SDR Agent System
 
 > **Find. Research. Call. Close.** — A multi-agent system that automates the entire sales development lifecycle, from lead discovery to meeting booking.
 
-Built with [Dedalus ADK](https://docs.dedaluslabs.ai) at **Columbia ADI DevFest 2026**.
-
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [What It Does](#-what-it-does)
 - [System Architecture](#-system-architecture)
@@ -24,12 +22,12 @@ Built with [Dedalus ADK](https://docs.dedaluslabs.ai) at **Columbia ADI DevFest 
 
 ---
 
-## 🎯 What It Does
+## What It Does
 
 RapidReach is a **fully autonomous SDR (Sales Development Representative)** that replaces the manual grind of prospecting with an intelligent multi-agent pipeline:
 
 ```
-  🔍 DISCOVER          🧠 RESEARCH          📞 CALL             📧 EMAIL            📅 BOOK
+   DISCOVER            RESEARCH            CALL                EMAIL               BOOK
   ┌─────────┐         ┌─────────┐         ┌─────────┐         ┌─────────┐         ┌─────────┐
   │  Google  │────────▶│  Web    │────────▶│  AI     │────────▶│ Custom  │────────▶│  Auto   │
   │  Maps    │         │  Search │         │  Voice  │         │ Proposal│         │ Schedule│
@@ -53,7 +51,7 @@ RapidReach is a **fully autonomous SDR (Sales Development Representative)** that
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 ### High-Level Service Map
 
@@ -205,7 +203,7 @@ graph LR
 
 ---
 
-## 🤖 Agent Workflow
+## Agent Workflow
 
 ### SDR Pipeline (per lead)
 
@@ -293,9 +291,9 @@ sequenceDiagram
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 🔍 Lead Discovery
+### Lead Discovery
 - **Geographic targeting** — search any city via Google Maps Places API
 - **Smart filtering** — auto-excludes chains (Starbucks, McDonald's, etc.)
 - **No-website filter** — only finds businesses without web presence (highest-value prospects)
@@ -303,35 +301,35 @@ sequenceDiagram
 - **Mock fallback** — works in local dev without API key (generates mock data)
 - **Smart dedup** — merges duplicate `place_id` entries, keeping the richest record
 
-### 🧠 AI Research & Proposals
+### AI Research & Proposals
 - **Deep web research** via Brave Search MCP — reviews, competitors, market position
 - **Generator-critic pattern** — draft proposal → fact-check → refined output
 - **Model specialization** — GPT-4.1 for research/coordination, Claude Sonnet for creative drafting
 
-### 📞 AI Voice Calls
+### AI Voice Calls
 - **Natural conversations** via ElevenLabs Conversational AI
 - **Batch calling API** with transcript polling
 - **Structured classification** — LLM parses transcript into `interested` / `agreed_to_email` / `not_interested`
 - **Email extraction** — sophisticated parser handles dictated addresses ("a-r-n-a-v at gmail dot com")
 
-### 📧 Professional Email Outreach
+### Professional Email Outreach
 - **Branded HTML emails** — gradient header, CTA button, professional footer
 - **PowerPoint attachment** — AI-generated business solution deck (.pptx)
 - **Calendar invite** — .ics file with proposed meeting time
 - **Fallback email** — uses configured fallback when no business email found
 
-### 📊 Deck Generation
+## Deck Generation
 - **AI-powered content** — executive summary, situation analysis, proposed solutions, ROI, timeline
 - **Professional slides** — built with `python-pptx`, styled for business presentations
 - **Template system** — professional, creative, and tech color schemes
 
-### 📅 Auto-Meeting Scheduling
+### Auto-Meeting Scheduling
 - **Gmail monitoring** — Pub/Sub real-time notifications (polling fallback)
 - **LLM email analysis** — detects meeting requests vs general interest vs rejection
 - **Calendar integration** — checks availability, creates events with Google Meet links
 - **Deck attachment** — generated PowerPoint attached to calendar invites
 
-### 🖥️ Real-Time Dashboard
+### Real-Time Dashboard
 - **WebSocket updates** — live event streaming from all agents
 - **Lead table** — discovered businesses with status badges
 - **SDR Outreach tab** — session cards with call outcomes and email status
@@ -340,7 +338,7 @@ sequenceDiagram
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -437,7 +435,7 @@ rapidreach/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Clone & Install
 
@@ -530,7 +528,7 @@ PYTHONPATH=. python -m deck_generator
 
 ---
 
-## 🔑 Environment Configuration
+## Environment Configuration
 
 ### API Keys Guide
 
@@ -559,7 +557,7 @@ Required IAM Roles / OAuth Scopes:
 
 ---
 
-## 📡 API Reference
+## API Reference
 
 ### UI Client — `:8000`
 
@@ -612,7 +610,7 @@ Required IAM Roles / OAuth Scopes:
 
 ---
 
-## 🧠 How the AI Works
+## How the AI Works
 
 ### Agent-as-Tool Pattern
 
@@ -670,7 +668,7 @@ result = await runner.run(
 
 ---
 
-## 🎨 Design Patterns
+## Design Patterns
 
 | Pattern | Where | How |
 |:--------|:------|:----|
@@ -685,7 +683,7 @@ result = await runner.run(
 
 ---
 
-## ⚠️ Limitations
+## Limitations
 
 | Area | Limitation | Mitigation |
 |:-----|:-----------|:-----------|
@@ -697,7 +695,7 @@ result = await runner.run(
 
 ---
 
-## 📊 Data Models
+## Data Models
 
 ```mermaid
 erDiagram
@@ -738,9 +736,3 @@ erDiagram
     Lead ||--o{ SDRResult : "outreach"
     SDRResult ||--o| Meeting : "books"
 ```
-
----
-
-## 📜 License
-
-Built at **Columbia ADI DevFest Hackathon 2026**.
